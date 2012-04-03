@@ -126,25 +126,43 @@ namespace System.Threading
 			
 			List<Exception> exceptions = null;
 			
+			// Allow callbacks to be removed during the processing
+			// of the set of callbacks.
+			CancellationTokenRegistration[] localCallbacks;
 			lock (syncRoot) {
-				try {
-					foreach (var item in callbacks) {
-						if (throwOnFirstException) {
-							item.Value ();
-						} else {
-							try {
-								item.Value ();
-							} catch (Exception e) {
-								if (exceptions == null)
-									exceptions = new List<Exception> ();
+				 localCallbacks = new CancellationTokenRegistration[callbacks.Count];
+				 callbacks.Keys.CopyTo(localCallbacks, 0);
+			}
+										
+			try {
+				foreach (var registration in localCallbacks) {
+					Action callback;
+					lock (syncRoot) {
+						callbacks.TryGetValue(registration, out callback);
+					}
 
-								exceptions.Add (e);
-							}
+					if (callback == null) {
+							continue;
+					}
+						
+					if (throwOnFirstException) {
+						callback ();
+					} else {
+						try {
+							callback ();
+						} catch (Exception e) {
+							if (exceptions == null)
+								exceptions = new List<Exception> ();
+	
+							exceptions.Add (e);
 						}
 					}
-				} finally {
-					callbacks.Clear ();
 				}
+			}
+			finally {
+				lock (syncRoot) {
+				 callbacks.Clear();
+				}				
 			}
 			
 			Thread.MemoryBarrier ();
@@ -265,19 +283,11 @@ namespace System.Threading
 		
 		internal void RemoveCallback (CancellationTokenRegistration tokenReg)
 		{
-			if (!canceled) {
+			if (!processed) {
 				lock (syncRoot) {
-					if (!canceled) {
-						callbacks.Remove (tokenReg);
-						return;
-					}
+					callbacks.Remove (tokenReg);
 				}
 			}
-			
-			SpinWait sw = new SpinWait ();
-			while (!processed)
-				sw.SpinOnce ();
-			
 		}
 	}
 }
